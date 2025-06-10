@@ -3,85 +3,66 @@ const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 const path = require('path');
-const CryptoJS = require('crypto-js');
+const crypto = require('crypto');
 
 // Serve static files
 app.use(express.static('public'));
 
-// Store active connections and their keys
+// Store active connections and their public keys
 const activeConnections = new Map();
-const transferKeys = new Map();
-
-// Generate a random encryption key
-function generateKey() {
-    return CryptoJS.lib.WordArray.random(32).toString();
-}
-
-// Encrypt data
-function encryptData(data, key) {
-    return CryptoJS.AES.encrypt(data, key).toString();
-}
-
-// Decrypt data
-function decryptData(encryptedData, key) {
-    const bytes = CryptoJS.AES.decrypt(encryptedData, key);
-    return bytes.toString(CryptoJS.enc.Utf8);
-}
+const userPublicKeys = new Map();
 
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
+
+    // Handle public key registration
+    socket.on('register-public-key', (data) => {
+        const { publicKey } = data;
+        userPublicKeys.set(socket.id, publicKey);
+        console.log(`Public key registered for user: ${socket.id}`);
+        
+        // Send confirmation back to client
+        socket.emit('key-registered', { success: true });
+    });
 
     // Handle file transfer request
     socket.on('request-transfer', (data) => {
         const { targetId, fileName } = data;
         const targetSocket = activeConnections.get(targetId);
+        const senderPublicKey = userPublicKeys.get(socket.id);
         
-        if (targetSocket) {
-            // Generate a unique key for this transfer
-            const transferKey = generateKey();
-            
-            // Store the key with both socket IDs
-            const transferId = `${socket.id}-${targetId}`;
-            transferKeys.set(transferId, transferKey);
-            
-            // Send the key to the target
+        if (targetSocket && senderPublicKey) {
+            // Send transfer request with sender's public key
             targetSocket.emit('transfer-request', {
                 sourceId: socket.id,
                 fileName: fileName,
-                key: transferKey,
-                transferId: transferId
+                senderPublicKey: senderPublicKey
             });
             
-            // Also send the key to the sender
-            socket.emit('transfer-key', {
-                targetId: targetId,
-                key: transferKey,
-                transferId: transferId
-            });
-            
-            console.log(`Transfer key generated for ${transferId}`);
-        } else {
+            console.log(`Transfer request sent from ${socket.id} to ${targetId}`);
+        } else if (!targetSocket) {
             socket.emit('error', 'Target user not found');
+        } else {
+            socket.emit('error', 'Please register your public key first');
         }
     });
 
-    // Handle encrypted file data - FIXED: Forward all file metadata
+    // Handle encrypted file data
     socket.on('encrypted-data', (data) => {
-        const { targetId, encryptedData, transferId, originalName, fileType, fileExtension } = data;
+        const { targetId, encryptedData, originalName, fileType, fileExtension } = data;
         const targetSocket = activeConnections.get(targetId);
         
         if (targetSocket) {
-            // Forward all the data including file metadata
+            // Forward the encrypted data to target
             targetSocket.emit('receive-data', {
                 sourceId: socket.id,
                 encryptedData: encryptedData,
-                transferId: transferId,
-                originalName: originalName,  // Add this
-                fileType: fileType,          // Add this
-                fileExtension: fileExtension // Add this
+                originalName: originalName,
+                fileType: fileType,
+                fileExtension: fileExtension
             });
             
-            console.log(`File data forwarded to ${targetId}:`, {
+            console.log(`Encrypted file data forwarded to ${targetId}:`, {
                 originalName,
                 fileType,
                 fileExtension
@@ -91,31 +72,31 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle transfer acceptance
+    // Handle transfer acceptance - send recipient's public key to sender
     socket.on('accept-transfer', (data) => {
-        const { sourceId, transferId } = data;
+        const { sourceId } = data;
         const sourceSocket = activeConnections.get(sourceId);
+        const recipientPublicKey = userPublicKeys.get(socket.id);
         
-        if (sourceSocket) {
+        if (sourceSocket && recipientPublicKey) {
             sourceSocket.emit('transfer-accepted', {
                 targetId: socket.id,
-                transferId: transferId
+                recipientPublicKey: recipientPublicKey
             });
+        } else {
+            socket.emit('error', 'Unable to accept transfer');
         }
     });
 
     // Handle transfer rejection
     socket.on('reject-transfer', (data) => {
-        const { sourceId, transferId } = data;
+        const { sourceId } = data;
         const sourceSocket = activeConnections.get(sourceId);
         
         if (sourceSocket) {
             sourceSocket.emit('transfer-rejected', {
-                targetId: socket.id,
-                transferId: transferId
+                targetId: socket.id
             });
-            // Clean up the key
-            transferKeys.delete(transferId);
         }
     });
 
@@ -126,12 +107,7 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
         activeConnections.delete(socket.id);
-        // Clean up any transfer keys associated with this socket
-        for (const [transferId, _] of transferKeys) {
-            if (transferId.includes(socket.id)) {
-                transferKeys.delete(transferId);
-            }
-        }
+        userPublicKeys.delete(socket.id);
     });
 });
 
