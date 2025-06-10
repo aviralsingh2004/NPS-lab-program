@@ -65,17 +65,29 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle encrypted file data
+    // Handle encrypted file data - FIXED: Forward all file metadata
     socket.on('encrypted-data', (data) => {
-        const { targetId, encryptedData, transferId } = data;
+        const { targetId, encryptedData, transferId, originalName, fileType, fileExtension } = data;
         const targetSocket = activeConnections.get(targetId);
         
         if (targetSocket) {
+            // Forward all the data including file metadata
             targetSocket.emit('receive-data', {
                 sourceId: socket.id,
                 encryptedData: encryptedData,
-                transferId: transferId
+                transferId: transferId,
+                originalName: originalName,  // Add this
+                fileType: fileType,          // Add this
+                fileExtension: fileExtension // Add this
             });
+            
+            console.log(`File data forwarded to ${targetId}:`, {
+                originalName,
+                fileType,
+                fileExtension
+            });
+        } else {
+            socket.emit('error', 'Target user not found');
         }
     });
 
@@ -131,4 +143,4 @@ app.get('/', (req, res) => {
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-}); 
+});

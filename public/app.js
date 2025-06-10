@@ -96,7 +96,7 @@ function getMimeType(filename) {
 
 // Handle encrypted data
 socket.on('receive-data', (data) => {
-    const { sourceId, encryptedData, transferId, fileName, fileType, fileExtension } = data;
+    const { sourceId, encryptedData, transferId, originalName, fileType, fileExtension } = data;
     const key = transferKeys.get(transferId);
     
     if (key) {
@@ -109,15 +109,32 @@ socket.on('receive-data', (data) => {
             const arrayBuffer = base64ToArrayBuffer(decryptedBase64);
             
             console.log('Data decrypted successfully');
-            console.log('Preparing to download file:', fileName);
             
-            // Ensure the file has the correct extension
-            const downloadFileName = fileName.includes('.') ? fileName : `${fileName}.${fileExtension}`;
+            // Handle filename and extension
+            let downloadFileName;
+            if (originalName) {
+                downloadFileName = originalName;
+            } else if (fileExtension) {
+                downloadFileName = `received_file.${fileExtension}`;
+            } else {
+                downloadFileName = 'received_file';
+            }
+            
+            console.log('Preparing to download file:', downloadFileName);
+            
+            // Determine the correct MIME type
+            let mimeType = fileType;
+            if (!mimeType && fileExtension) {
+                mimeType = getMimeType(`file.${fileExtension}`);
+            }
+            if (!mimeType) {
+                mimeType = 'application/octet-stream';
+            }
+            
+            console.log('Using MIME type:', mimeType);
             
             // Create and download the file with proper MIME type
-            const blob = new Blob([arrayBuffer], { 
-                type: fileType || getMimeType(downloadFileName)
-            });
+            const blob = new Blob([arrayBuffer], { type: mimeType });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -237,14 +254,21 @@ function sendFile(targetId, transferId) {
                 // Encrypt the base64 data
                 const encryptedData = CryptoJS.AES.encrypt(base64Data, key).toString();
                 
+                // Get file metadata
+                const fileMetadata = {
+                    originalName: file.name,
+                    fileType: file.type,
+                    fileExtension: getFileExtension(file.name)
+                };
+                
+                console.log('Sending file metadata:', fileMetadata);
+                
                 // Send the encrypted data with file metadata
                 socket.emit('encrypted-data', {
                     targetId,
                     encryptedData,
                     transferId,
-                    fileName: file.name,
-                    fileType: file.type || getMimeType(file.name),
-                    fileExtension: getFileExtension(file.name)
+                    ...fileMetadata
                 });
                 
                 addTransferStatus('File encrypted and sent');
